@@ -1,0 +1,88 @@
+generator client {
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "windows", "linux-musl", "linux-musl-arm64-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+model Admin {
+  id           Int       @id @default(autoincrement())
+  google_id    String?   @unique
+  email        String?
+  fname        String
+  lname        String
+  admin_name   String?   @unique
+  authType     String    @default("local")
+  role         String
+  verified     Boolean   @default(false)
+  password     String?
+  contact      String?
+  isActive     Boolean?  @default(false)
+  lastVerified DateTime? @default(now())
+  createdAt    DateTime  @default(now())
+}
+
+model Token {
+  id          Int      @id @default(autoincrement())
+  google_id   String?  @unique
+  email       String?
+  fname       String
+  lname       String
+  admin_name  String?  @unique
+  contact     String?
+  password    String?
+  token       Int      @unique
+  expiresAt   DateTime
+  createdAt   DateTime @default(now())
+}
+
+model ResetPasswordToken {
+  id         Int      @id @default(autoincrement())
+  admin_name String
+  token      String   @unique
+  tempFlag   String   @unique
+  confirmed  Boolean  @default(false)
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+}
+
+model Driver {
+  id              Int       @id @default(autoincrement())
+  driver_img      Bytes?
+  img_type        String?
+  driver_id       String?
+  plate_no        String?
+  card_id         String?   @unique
+  dev_id          String    @unique
+  dev_status_mode String?
+  dev_mode        Boolean?
+  fname           String?
+  lname           String?
+  full_name       String?
+  contact         String?   @unique
+  createdAt       DateTime? @default(now())
+  isDeleted       Boolean?  @default(false)
+
+  attendance Attendance[]
+
+  @@unique([driver_id])
+}
+
+model Attendance {
+  id            Int       @id @default(autoincrement())
+  driver_id     String?
+  full_name     String?
+  driver_status String?
+  time_in       DateTime? @default(now())
+  time_out      DateTime? @default(now())
+  createdAt     DateTime? @default(now())
+  butaw         Decimal?  @default(0.00)
+  boundary      Decimal?  @default(0.00)
+  balance       Decimal?  @default(0.00)
+  paid          String?
+
+  driver Driver? @relation(fields: [driver_id], references: [driver_id], onDelete: SetNull)
+}
