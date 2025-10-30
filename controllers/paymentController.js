@@ -96,7 +96,7 @@ const updatePaymentButaw = async (req, res) => {
             return res.sendStatus(401);
         }
 
-        if (role !== 'admin' && role !== 'super-admin') {
+        if (role !== 'admin' && role !== 'super-admin' && role !== 'driver') {
             return res.sendStatus(401);
         }
 
@@ -104,7 +104,12 @@ const updatePaymentButaw = async (req, res) => {
             return res.sendStatus(401);
         }
 
-        const doesExist = await prisma.admin.findUnique({ where: { id: userId } });
+        let doesExist;
+        if (role === 'driver') {
+            doesExist = await prisma.driverAcc.findUnique({ where: { id: userId } });
+        } else {
+            doesExist = await prisma.admin.findUnique({ where: { id: userId } });
+        }
 
         if(!doesExist){
             return res.sendStatus(401);
@@ -214,7 +219,7 @@ const updatePaymentBoundary = async (req, res) => {
             return res.sendStatus(401);
         }
 
-        if (role !== 'admin' && role !== 'super-admin') {
+        if (role !== 'admin' && role !== 'super-admin' && role !== 'driver') {
             return res.sendStatus(401);
         }
 
@@ -222,7 +227,12 @@ const updatePaymentBoundary = async (req, res) => {
             return res.sendStatus(401);
         }
 
-        const doesExist = await prisma.admin.findUnique({ where: { id: userId } });
+        let doesExist;
+        if (role === 'driver') {
+            doesExist = await prisma.driverAcc.findUnique({ where: { id: userId } });
+        } else {
+            doesExist = await prisma.admin.findUnique({ where: { id: userId } });
+        }
 
         if(!doesExist){
             return res.sendStatus(401);
@@ -328,11 +338,16 @@ const updateBothPayments = async (req, res) => {
             return res.sendStatus(401);
         }
 
-        if (authType !== 'local' && authType !== 'google') {
+        if (authType !== 'local' && authType !== 'google' && role !== 'driver') {
             return res.sendStatus(401);
         }
 
-        const doesExist = await prisma.admin.findUnique({ where: { id: userId } });
+        let doesExist;
+        if (role === 'driver') {
+            doesExist = await prisma.driverAcc.findUnique({ where: { id: userId } });
+        } else {
+            doesExist = await prisma.admin.findUnique({ where: { id: userId } });
+        }
 
         if(!doesExist){
             return res.sendStatus(401);

@@ -628,19 +628,27 @@ const checkDriverName = async (req, res) => {
             return res.sendStatus(401);
         }        
 
-        const driver = await prisma.driver.findFirst({
-            where: { 
-                id,
-                isDeleted: false
-            },
-            select: { id: true, full_name: true }
+        const driverAccRecord = await prisma.driverAcc.findUnique({
+            where: { id }, 
+            select: {
+                driverId: true,
+                driver: {
+                    select: {
+                        id: true,
+                        driver_id: true,
+                        full_name: true,
+                    }
+                }
+            }
         });
 
-        if (!driver) {
+        if (!driverAccRecord || !driverAccRecord.driver) {
             return res.status(404).json({ message: 'Driver not found' });
         }
 
-        res.status(200).json(driver);        
+        const driverData = driverAccRecord.driver;
+
+        res.status(200).json(driverData);        
     } catch (err) {
         console.error('Error', err);
         res.status(500).json({ mnessage: 'Internal Error' });
@@ -787,6 +795,7 @@ const manualTimeOut = async (req, res) => {
             where: { id: existing.id },
             data: {
                 time_out: new Date(time_out),
+                paid: 'Paid',
                 driver_status: 'OUT',
                 reason
             }

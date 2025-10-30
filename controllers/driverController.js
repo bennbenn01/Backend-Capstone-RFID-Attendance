@@ -723,7 +723,7 @@ const dashboardDriverInfo = async (req, res) => {
             return res.sendStatus(401);
         }
 
-        if (role !== 'admin' && role !== 'super-admin' && role !== 'driver') {
+        if (role !== 'driver') {
             return res.sendStatus(401);
         }
 
@@ -731,35 +731,40 @@ const dashboardDriverInfo = async (req, res) => {
             return res.sendStatus(401);
         }  
 
-        const latestDriver = await prisma.driver.findFirst({
-            where: {
-                id,
-                isDeleted: false,
-            },
+        const latestDriver = await prisma.driverAcc.findUnique({
+            where: { id },
             select: {
-                driver_img: true,
-                img_type: true,
-                driver_id: true,
-                full_name: true,
-            },
+                driverId: true,
+                driver: {
+                    select: {
+                        driver_img: true,
+                        img_type: true,
+                        driver_id: true,
+                        full_name: true,
+                    }
+                }
+            }
         });
 
-        if (!latestDriver) {
+        if (!latestDriver || !latestDriver.driver) {
             return res.status(200).json(null);
         }
 
+        const driverData = latestDriver.driver;
+
         let imageUrl = null;
-        if (latestDriver.driver_img && latestDriver.img_type) {
-            const base64Image = Buffer.from(latestDriver.driver_img).toString("base64");
-            imageUrl = `data:${latestDriver.img_type};base64,${base64Image}`;
+        if (driverData.driver_img && driverData.img_type) {
+            const base64Image = Buffer.from(driverData.driver_img).toString("base64");
+            imageUrl = `data:${driverData.img_type};base64,${base64Image}`;
         }
 
         res.status(200).json({ 
             driver_img: imageUrl,
-            driver_id: latestDriver.driver_id,
-            driver_name: latestDriver.full_name,
+            driver_id: driverData.driver_id,
+            driver_name: driverData.full_name,
         });
     } catch (err) {
+        console.error('Error', err);
         res.status(500).json({ message: 'Internal Error' });       
     }
 }
@@ -789,21 +794,21 @@ const dashboardDriverRequestLeave = async (req, res) => {
         }
 
         const driverAccount = await prisma.driverAcc.findUnique({
-            where: { id },
-            include: {
-                driver: true
-            }
+            where: { id: id },
+            include: { driver: true }
         });
 
         if (!driverAccount) {
             return res.status(404).json({ message: 'Driver account not found.' });
         }
 
+        const leaveTypeValue = Array.isArray(leaveType) ? leaveType[0] : leaveType;
+
         const leaveRequest = await prisma.requestLeave.create({
             data: {
                 driver_acc_id: id, 
                 driver_id: driverAccount.driver?.driver_id,
-                leaveType,
+                leaveType: leaveTypeValue,
                 dateRange,
                 remarks: remarks || null,
                 status: 'Pending',
@@ -836,6 +841,79 @@ const dashboardDriverRequestLeave = async (req, res) => {
     }
 }
 
+const confirmRequestLeave = async (req, res) => {
+    const io = req.app.get('io');
+
+    try {
+        const { id, authType, role } = req.user;
+
+        if (!id || !authType || !role) {
+            return res.sendStatus(401);
+        }
+
+        if (role !== 'admin' && role !== 'super-admin') {
+            return res.sendStatus(401);
+        }
+
+        if (!['local', 'google'].includes(authType)) {
+            return res.sendStatus(401);
+        }
+
+        const { requestId, status } = req.body;
+
+        if (!requestId || !status) {
+            return res.status(400).json({ message: 'Missing required fields.' });
+        }
+
+        if (!['Approved', 'Rejected'].includes(status)) {
+            return res.status(400).json({ message: 'Invalid status value.' });
+        }
+
+        const leaveRequest = await prisma.requestLeave.findUnique({
+            where: { id: requestId },
+            include: {
+                driverAccount: {
+                    include: {
+                        driver: true
+                    }
+                }
+            }
+        });
+
+        if (!leaveRequest) {
+            return res.status(404).json({ message: 'Leave request not found.' });
+        }
+
+        const updatedRequest = await prisma.requestLeave.update({
+            where: { id: requestId },
+            data: {
+                status
+            },
+            include: {
+                driverAccount: {
+                    include: {
+                        driver: true
+                    }
+                }
+            }
+        });
+
+        io.to(`driver-${leaveRequest.driver_acc_id}`).emit('request-leave-status', {
+            action: 'request-leave-status',
+            message: `Your leave request has been ${status.toLowerCase()}.`,
+            data: updatedRequest,
+        });
+
+        res.status(200).json({ 
+            message: `Leave request ${status.toLowerCase()} successfully.`,
+            data: updatedRequest
+        });
+    } catch (err) {
+        console.error('Error confirming leave request:', err);
+        res.status(500).json({ message: 'Internal Error' });
+    }
+}
+
 const driverController = {
     dashboard_data,
     manage_users_data,
@@ -845,6 +923,7 @@ const driverController = {
     updateDriver,
     dashboardDriverInfo,
     dashboardDriverRequestLeave,
+    confirmRequestLeave,
 }
 
 export default driverController;

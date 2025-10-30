@@ -19,7 +19,24 @@ const data_analytics_data = async (req, res) => {
         }
 
         const condition = role === 'super-admin'
-            ? null
+            ? {
+                driver_db_id: { not: null },
+                OR: [
+                    {
+                    createdAt: {
+                        gte: timeHelper.today(),
+                        lt: timeHelper.tomorrow(),
+                    },
+                    },
+                    {
+                    time_in: { not: null },
+                    time_out: null,
+                    },
+                ],
+                driver: {
+                    isDeleted: false,
+                },
+            }
             :  { 
                 driver_db_id: { not: null },
                 OR: [

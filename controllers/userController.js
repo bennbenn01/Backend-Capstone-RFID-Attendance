@@ -3,6 +3,7 @@ import hashPassword from '../utils/hashPassword.js'
 import generateNumericToken from '../utils/generateToken.js'
 import sendEmail from "../utils/sendEmail.js"
 import { EarlyResponse, EmailSendError } from '../utils/customError.js'
+import { generateRfidUuid } from "../utils/generateRfidUuid.js"
 import cron from 'node-cron'
 const prisma = new PrismaClient();
 
@@ -181,7 +182,7 @@ const createDriver = async (req, res) => {
         if (err instanceof EmailSendError) {
             return res.status(400).json({ message: err.message });
         }
-        
+        console.error('Error', err);
         res.status(500).json({ message: 'Internal Error' });
     }
 }
@@ -401,11 +402,35 @@ const verifyAdmin = async (req, res) => {
                     },
                 });
             } else if (role === 'driver') {
+                const newDriver = await tx.driver.create({
+                    data: {
+                        driver_id: generateRfidUuid(),
+                        fname: tempToken.fname,
+                        lname: tempToken.lname,
+                        full_name: `${tempToken.fname} ${tempToken.lname}`,
+                        contact: tempToken.contact,
+                        dev_id: generateRfidUuid(),
+                        dev_status_mode: 'Register',
+                        dev_mode: false,
+
+                    },
+                });
+                
+                await tx.deviceQueue.create({
+                    data: {
+                        device_id: newDriver.id,
+                        id: newDriver.id,
+                        admin_id: newDriver.id,
+                        processed: false
+                    }
+                });
+
                 await tx.driverAcc.create({
                     data: {
                         ...createData,
                         driver_name: tempToken.admin_name, 
                         role: 'driver',
+                        driverId: newDriver.id
                     },
                 });
             } else {
@@ -426,7 +451,7 @@ const verifyAdmin = async (req, res) => {
         if (err.message === 'InvalidRole') {
         return res.status(400).json({ message: 'Invalid role in token' });
         }
-        
+        console.error('Error', err);
         res.status(500).json({ message: 'Internal Error' });
     }
 }

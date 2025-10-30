@@ -29,5 +29,6 @@ router.patch('/update-driver', verifyToken, upload.single('driver_img'), driverV
 
 router.post('/dashboard-driver-info', verifyToken, driverController.dashboardDriverInfo);
 router.post('/dashboard-request-leave', verifyToken, driverController.dashboardDriverRequestLeave);
+router.post('/dashboard-confirm-request-leave', verifyToken, driverController.confirmRequestLeave);
 
 export default router;
