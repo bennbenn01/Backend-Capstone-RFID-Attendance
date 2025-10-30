@@ -8,6 +8,15 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+model DeviceQueue {
+  id        Int     @id @default(autoincrement())
+  device_id Int
+  admin_id  Int
+  processed Boolean @default(false)
+
+  createdAt DateTime @default(now())
+}
+
 model Admin {
   id           Int       @id @default(autoincrement())
   google_id    String?   @unique
@@ -23,20 +32,47 @@ model Admin {
   isActive     Boolean?  @default(false)
   lastVerified DateTime? @default(now())
   createdAt    DateTime  @default(now())
+  isDeleted    Boolean?  @default(false)
+
+  drivers     Driver[]     @relation("AdminDrivers")
+  attendances Attendance[] @relation("AdminAttendances")
+}
+
+model driverAcc {
+  id           Int       @id @default(autoincrement())
+  google_id    String?   @unique
+  email        String?
+  fname        String
+  lname        String
+  driver_name  String?   @unique
+  authType     String    @default("local")
+  role         String
+  verified     Boolean   @default(false)
+  password     String?
+  contact      String?
+  isActive     Boolean?  @default(false)
+  lastVerified DateTime? @default(now())
+  createdAt    DateTime  @default(now())
+  isDeleted    Boolean?  @default(false)
+
+  driver   Driver? @relation("DriverToAccount", fields: [driverId], references: [id])
+  driverId Int?    @unique
+  requestLeaves RequestLeave[] @relation("DriverAccountRequestLeaves")  
 }
 
 model Token {
-  id          Int      @id @default(autoincrement())
-  google_id   String?  @unique
-  email       String?
-  fname       String
-  lname       String
-  admin_name  String?  @unique
-  contact     String?
-  password    String?
-  token       Int      @unique
-  expiresAt   DateTime
-  createdAt   DateTime @default(now())
+  id         Int      @id @default(autoincrement())
+  google_id  String?  @unique
+  email      String?
+  fname      String
+  lname      String
+  admin_name String?  @unique
+  contact    String?
+  role       String?
+  password   String?
+  token      Int      @unique
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
 }
 
 model ResetPasswordToken {
@@ -55,24 +91,25 @@ model Driver {
   img_type        String?
   driver_id       String?
   plate_no        String?
-  card_id         String?   @unique
-  dev_id          String    @unique
+  card_id         String?
+  dev_id          String
   dev_status_mode String?
   dev_mode        Boolean?
   fname           String?
   lname           String?
   full_name       String?
-  contact         String?   @unique
+  contact         String?
   createdAt       DateTime? @default(now())
   isDeleted       Boolean?  @default(false)
 
+  admins     Admin[]      @relation("AdminDrivers")
+  driverAcc  driverAcc?   @relation("DriverToAccount")
   attendance Attendance[]
-
-  @@unique([driver_id])
 }
 
 model Attendance {
   id            Int       @id @default(autoincrement())
+  driver_db_id  Int?
   driver_id     String?
   full_name     String?
   driver_status String?
@@ -83,6 +120,22 @@ model Attendance {
   boundary      Decimal?  @default(0.00)
   balance       Decimal?  @default(0.00)
   paid          String?
+  reason        String?
 
-  driver Driver? @relation(fields: [driver_id], references: [driver_id], onDelete: SetNull)
+  admins Admin[] @relation("AdminAttendances")
+  driver Driver? @relation(fields: [driver_db_id], references: [id], onDelete: SetNull)
+
+}
+
+model RequestLeave {
+  id           Int       @id @default(autoincrement())
+  driver_acc_id Int
+  driver_id    String?
+  leaveType    String
+  dateRange    String
+  remarks      String?
+  status       String     @default("Pending")
+  createdAt    DateTime   @default(now())
+
+  driverAccount  driverAcc @relation("DriverAccountRequestLeaves", fields: [driver_acc_id], references: [id])
 }

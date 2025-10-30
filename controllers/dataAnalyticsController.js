@@ -18,9 +18,10 @@ const data_analytics_data = async (req, res) => {
             return res.sendStatus(401);
         }
 
-        const drivers = await prisma.attendance.findMany({
-            where: {
-                driver_id: { not: null },
+        const condition = role === 'super-admin'
+            ? null
+            :  { 
+                driver_db_id: { not: null },
                 OR: [
                     {
                         createdAt: {
@@ -32,8 +33,15 @@ const data_analytics_data = async (req, res) => {
                         time_in: { not: null },
                         time_out: null
                     }
-                ]
-            },
+                ],
+                driver: {
+                    isDeleted: false,
+                    admins: { some: { id: id } }
+                }
+            }
+
+        const drivers = await prisma.attendance.findMany({
+            where: condition,
             orderBy: { createdAt: 'desc' },            
         });
 

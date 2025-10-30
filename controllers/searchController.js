@@ -62,7 +62,7 @@ const searchQuery = async (req, res) => {
         const cleanQuery = query.trim().replace(/\s+/g, ' ');
 
         if (query) {
-            const esResults = await esSearch(cleanQuery, searchFields);
+            const esResults = await esSearch(cleanQuery, searchFields, id);
 
             const driverIdsFromES = esResults.map(driver => driver.driver_id);
 
@@ -75,7 +75,11 @@ const searchQuery = async (req, res) => {
                     skip,
                     take,
                     where: {
-                        driver: { isDeleted: false },
+                        driver: { 
+                            isDeleted: false,
+                            admins: { some: { id: id } } 
+                        },
+                        admins: { some: { id: id } },
                         OR: [
                             {
                                 createdAt: {
@@ -142,10 +146,18 @@ const searchQuery = async (req, res) => {
                 prisma.driver.findMany({
                     skip,
                     take,
-                    where: { isDeleted: false },
+                    where: { 
+                        isDeleted: false,
+                        admins: { some: { id: id } } 
+                    },
                     orderBy: { id: 'asc' }
                 }),
-                prisma.driver.count()
+                prisma.driver.count({
+                    where: { 
+                        isDeleted: false,
+                        admins: { some: { id: id } }
+                    }
+                })
             ]);
 
             const driversWithBase64Images = drivers.map(drivers => {
@@ -175,7 +187,11 @@ const searchQuery = async (req, res) => {
                 skip,
                 take,
                 where: {
-                    driver: { isDeleted: false },
+                    driver: { 
+                        isDeleted: false,
+                        admins: { some: { id: id } } 
+                    },
+                    admins: { some: { id: id } },
                     OR: [
                         {
                             createdAt: {
@@ -192,9 +208,14 @@ const searchQuery = async (req, res) => {
                 orderBy: { createdAt: 'desc' },
             });
 
-            const totalCount = await prisma.driver.count({
+            const totalCount = await prisma.attendance.count({
                 where: {
-                    driver_id: { not: null },
+                    driver_db_id: { not: null },
+                    driver: {
+                        isDeleted: false,
+                        admins: { some: { id: id } }
+                    },
+                    admins: { some: { id: id } },
                     createdAt: {
                         gte: timeHelper.today(),
                         lt: timeHelper.tomorrow()
@@ -215,7 +236,11 @@ const searchQuery = async (req, res) => {
         if (data_analytics) {
             const drivers = await prisma.attendance.findMany({
                 where: {
-                    driver_id: { not: null }
+                    driver_db_id: { not: null },
+                    driver: {
+                        admins: { some: { id: id } }
+                    },  
+                    admins: { some: { id: id } }
                 },
                 orderBy: { createdAt: 'desc' },
             });
@@ -295,6 +320,11 @@ const dateSearchQuery = async (req, res) => {
                 driver_id,
                 full_name: { contains: full_name },
                 time_in: { gte: start, lte: end },
+                driver: {
+                    isDeleted: false,
+                    admins: { some: { id: id } }
+                },
+                admins: { some: { id: id } },
                 OR: [
                     { time_out: { gte: start } },
                     { time_out: null },
@@ -321,6 +351,11 @@ const dateSearchQuery = async (req, res) => {
         } else if (start && end) {
             where = {
                 time_in: { gte: start, lte: end },
+                driver: {
+                    isDeleted: false,
+                    admins: { some: { id: id } }
+                },
+                adkmins: { some: { id: id } },
                 OR: [
                     { time_out: { gte: start } },
                     { time_out: null },

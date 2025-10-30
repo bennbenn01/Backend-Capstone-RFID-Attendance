@@ -43,7 +43,7 @@ async function sendVerification(full_name, token) {
         html: `
             <h2>New User Registration Pending</h2>
             <p>Admin name: <strong>${full_name}</strong> has registered and requires verification.</p>
-            <p>Click the link below to verify the admin:</p>
+            <p>This is the token below:</p>
             <p style="text-align:center; font-size: 30px; font-weight: bold;">${token}</p>
         `,
     }
@@ -64,7 +64,7 @@ async function sendGoogleVerification(full_name, token) {
         html: `
             <h2>New User Registration Pending</h2>
             <p>Email: <strong>${full_name}</strong> account from <strong>Google</strong> has registered and requires verification.</p>
-            <p>Click the link below to verify the admin:</p>
+            <p>This is the token below:</p>
             <p style="text-align:center; font-size: 30px; font-weight: bold;">${token}</p>
         `,
     }

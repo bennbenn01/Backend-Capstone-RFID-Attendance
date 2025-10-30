@@ -49,7 +49,7 @@ export const apiRateLimiter = (req, res, next) => {
             return externalRateLimiter(req, res, next);
         }
 
-        if(!req.cookies.token || !req.cookies['XSRF-TOKEN']){
+        if(!req.cookies.token){
             return externalRateLimiter(req, res, next);
         }
 
@@ -132,7 +132,7 @@ const searchQueryOption = rateLimit({
 
 export const customizedRateLimiter = {
     noToken: (req, res, next) => {
-        if(!req.cookies['XSRF-TOKEN']){
+        if(!req.cookies?.token && !req.cookies?.refresh_token){
             return noTokenOption(req, res, next);
         }
 

@@ -11,7 +11,7 @@ const payment_data = async (req, res) => {
             return res.sendStatus(401);
         }
 
-        if (role !== 'admin' && role !== 'super-admin') {
+        if (role !== 'admin' && role !== 'super-admin' && role !== 'driver') {
             return res.sendStatus(401);
         }
 
@@ -29,8 +29,35 @@ const payment_data = async (req, res) => {
         const safePage = Number.isInteger(rawPage) && rawPage > 0 ? rawPage : 1;
         const take = 10;
 
+        let condition = {}
+
+        if (role === 'super-admin' || role === 'admin') {
+            condition = role === 'super-admin'                 
+                ? { isDeleted: false }
+                : { 
+                    isDeleted: false,
+                    admins: { some: { id: userId } } 
+                }
+        } else if (role === 'driver') {
+            const driver = await prisma.driverAcc.findUnique({
+                where: { id: userId },
+                select: { driverId: true }
+            });
+
+            if (!driver || !driver.driverId) {
+                return res.status(404).json({ message: 'Driver record not found' });
+            }            
+
+            condition = {
+                id: driver.driverId,
+                isDeleted: false
+            }
+        } else {
+            return res.sendStatus(401);
+        }
+
         const totalCount = await prisma.driver.count({
-            where: { isDeleted: false },
+            where: condition,
         });
         const totalPages = Math.max(Math.ceil(totalCount / take), 1);
 
@@ -40,8 +67,12 @@ const payment_data = async (req, res) => {
         const payment = await prisma.driver.findMany({
             skip,
             take,
-            where: { isDeleted: false },
-            orderBy: { createdAt: 'desc' }
+            where: condition,
+            orderBy: { createdAt: 'desc' },
+            include: {
+                driverAcc,
+                attendance
+            }
         });
 
         res.status(200).json({
@@ -88,13 +119,20 @@ const updatePaymentButaw = async (req, res) => {
             return res.status(400).json({ message: 'Invalid request' });
         }
 
-        const driverExists = await prisma.driver.findFirst({
-            where: { driver_id, isDeleted: false },
-            select: { isDeleted: true }
+        const attendanceExists = await prisma.attendance.findFirst({
+            where: { 
+                id,
+                driver_id,
+                driver: { 
+                    isDeleted: false,
+                    admins: { some: { id: userId } }
+                },
+                admins: { some: { id: userId } }
+            }
         });
 
-        if (!driverExists || driverExists.isDeleted) {
-            return res.status(400).json({ message: 'Driver not found or deleted' });
+        if (!attendanceExists) {
+            return res.status(400).json({ message: 'Attendance record not found or deleted' });
         }
 
         const updated = await prisma.$transaction(async (tx) => {
@@ -106,19 +144,21 @@ const updatePaymentButaw = async (req, res) => {
                 throw new DoesExist();
             }
 
-            const [existPayment] = await tx.$queryRaw`
-                SELECT id, driver_id, butaw, boundary, balance, paid FROM \`Attendance\`
-                WHERE id = ${id} AND driver_id = ${driver_id}
-                FOR UPDATE
-            `;
-
-            const boundaryVal = existPayment.boundary ? Number(existPayment.boundary.toString()) : 0;
-            const butawVal = existPayment.butaw ? Number(existPayment.butaw.toString()) : 0;
-            const balanceVal = existPayment.balance ? Number(existPayment.balance.toString()) : 0;
+            const existPayment = await tx.attendance.findFirst({
+                where: {
+                    id,
+                    driver_id,
+                    admins: { some: { id: userId } }
+                }
+            });
 
             if(!existPayment){
                 throw new DoesExist();
             }
+
+            const boundaryVal = existPayment.boundary ? Number(existPayment.boundary.toString()) : 0;
+            const butawVal = existPayment.butaw ? Number(existPayment.butaw.toString()) : 0;
+            const balanceVal = existPayment.balance ? Number(existPayment.balance.toString()) : 0;
 
             if(
                 boundaryVal === 0 && 
@@ -158,7 +198,7 @@ const updatePaymentButaw = async (req, res) => {
         if(err instanceof DoesExist){
             return res.status(err.status).json({ message: err.message });
         }
-
+        
         res.status(500).json({ message: 'Internal Error' });
     }
 }
@@ -197,29 +237,38 @@ const updatePaymentBoundary = async (req, res) => {
             return res.status(400).json({ message: 'Invalid request' });
         }
 
-        const driverExists = await prisma.driver.findFirst({
-            where: { driver_id, isDeleted: false },
-            select: { isDeleted: true }
+        const attendanceExists = await prisma.attendance.findFirst({
+            where: { 
+                id,
+                driver_id,
+                driver: { 
+                    isDeleted: false,
+                    admins: { some: { id: userId } }
+                },
+                admins: { some: { id: userId } }
+            }
         });
 
-        if (!driverExists || driverExists.isDeleted) {
-            return res.status(400).json({ message: 'Driver not found or deleted' });
+        if (!attendanceExists) {
+            return res.status(400).json({ message: 'Attendance record not found or deleted' });
         }
 
         const updated = await prisma.$transaction(async (tx) => {
-            const [existPayment] = await tx.$queryRaw`
-                SELECT id, driver_id, butaw, boundary, balance, paid FROM \`Attendance\`
-                WHERE id = ${id} AND driver_id = ${driver_id}
-                FOR UPDATE
-            `;
-
-            const boundaryVal = existPayment.boundary ? Number(existPayment.boundary.toString()) : 0;
-            const butawVal = existPayment.butaw ? Number(existPayment.butaw.toString()) : 0;
-            const balanceVal = existPayment.balance ? Number(existPayment.balance.toString()) : 0;
+            const existPayment = await tx.attendance.findFirst({
+                where: {
+                    id,
+                    driver_id,
+                    admins: { some: { id: userId } }
+                }
+            });
 
             if(!existPayment){
                 throw new DoesExist();
             }
+
+            const boundaryVal = existPayment.boundary ? Number(existPayment.boundary.toString()) : 0;
+            const butawVal = existPayment.butaw ? Number(existPayment.butaw.toString()) : 0;
+            const balanceVal = existPayment.balance ? Number(existPayment.balance.toString()) : 0;
 
             if(
                 butawVal === 0 &&
@@ -259,7 +308,7 @@ const updatePaymentBoundary = async (req, res) => {
         if(err instanceof DoesExist){
             return res.status(err.status).json({ message: err.message });
         }
-
+    
         res.status(500).json({ message: 'Internal Error' });
     }
 }
@@ -303,17 +352,21 @@ const updateBothPayments = async (req, res) => {
                 where: { 
                     id: id,
                     driver_id: driver_id,
-                    driver: { isDeleted: false }
+                    driver: { 
+                        isDeleted: false,
+                        admins: { some: { id: userId } } 
+                    },
+                    admins: { some: { id: userId } }
                 }
             });
-
-            const butawVal = existPayment.butaw ? Number(existPayment.butaw.toString()) : 0;
-            const boundaryVal = existPayment.boundary ? Number(existPayment.boundary.toString()) : 0;
-            const balanceVal = existPayment.balance ? Number(existPayment.balance.toString()) : 0;
 
             if(!existPayment){
                 throw new DoesExist();
             }
+
+            const butawVal = existPayment.butaw ? Number(existPayment.butaw.toString()) : 0;
+            const boundaryVal = existPayment.boundary ? Number(existPayment.boundary.toString()) : 0;
+            const balanceVal = existPayment.balance ? Number(existPayment.balance.toString()) : 0;
 
             if(
                 butawVal === 0 &&

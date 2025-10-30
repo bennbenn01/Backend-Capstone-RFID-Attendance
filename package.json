@@ -6,11 +6,11 @@
   "scripts": {
     "start": "NODE_ENV=production node index.js",
     "dev": "NODE_ENV=dev nodemon index.js",
+    "seed": "node prisma/seed.js",
     "db:init": "dotenv -e .env.development -- npx prisma migrate dev --name init",
     "db:reset": "dotenv -e .env.development -- npx prisma migrate reset",
     "prod:db:init": "dotenv -e .env.production -- npx prisma migrate dev --name init",
     "prod:db:reset": "dotenv -e .env.production -- npx prisma migrate reset"
-
   },
   "keywords": [],
   "author": "",
@@ -23,7 +23,6 @@
     "compression": "^1.8.1",
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.5",
-    "csurf": "^1.2.2",
     "dotenv": "^17.2.1",
     "express": "^5.1.0",
     "express-rate-limit": "^8.1.0",

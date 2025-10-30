@@ -12,6 +12,19 @@ const dashboard_data = async (req, res) => {
             return res.sendStatus(401);
         }
 
+        if (role === 'driver') {
+            return res.status(200).json({ 
+                drivers: null,
+                totalAttendance: null,
+                totalDrivers: null,
+                totalButaw: null,
+                totalBoundary: null,
+                totalPaid: null,
+                totalPages: null,
+                currentPage: null
+            });
+        }
+
         if (role !== 'admin' && role !== 'super-admin') {
             return res.sendStatus(401);
         }
@@ -38,7 +51,11 @@ const dashboard_data = async (req, res) => {
                         time_out: null
                     },
                 ],
-                driver: { isDeleted: false }
+                driver: { 
+                    isDeleted: false,
+                    admins: { some: { id: id } }
+                },
+                admins: { some: { id: id } }
             }
         });
         const totalPages = Math.max(Math.ceil(totalCount / take), 1);
@@ -62,7 +79,11 @@ const dashboard_data = async (req, res) => {
                         time_out: null
                     }
                 ],
-                driver: { isDeleted: false }
+                driver: { 
+                    isDeleted: false,
+                    admins: { some: { id: id } }
+                },
+                admins: { some: { id: id } }
             },
             orderBy: { createdAt: 'desc' },
             include: {
@@ -87,54 +108,67 @@ const dashboard_data = async (req, res) => {
 
         const totalAttendance = await prisma.attendance.count({
             where: {
-                driver_id: { not: null },
+                driver_db_id: { not: null },
                 createdAt: {
                     gte: timeHelper.today(),
                     lt: timeHelper.tomorrow()
                 },
-                driver: { isDeleted: false },
+                driver: { 
+                    isDeleted: false ,
+                    admins: { some: { id: id } }
+                },
             }
         });
 
         const totalDrivers = await prisma.driver.count({
             where: { 
-                driver_id: { not: null }, isDeleted: false
+                driver_id: { not: null }, isDeleted: false, admins: { some: { id: id } }
             }
         });
 
         const totalButaw = await prisma.attendance.count({
             where: { 
                 butaw: 20,
-                driver_id: { not: null },
+                driver_db_id: { not: null },
                 createdAt: {
                     gte: timeHelper.today(),
                     lt: timeHelper.tomorrow()
                 },   
-                driver: { isDeleted: false },
+                driver: { 
+                    isDeleted: false,
+                    admins: { some: { id: id } } 
+                },
             }
         });
 
         const totalBoundary = await prisma.attendance.count({
             where: { 
                 boundary: 300,
-                driver_id: { not: null },
+                driver_db_id: { not: null },
                 createdAt: {
                     gte: timeHelper.today(),
                     lt: timeHelper.tomorrow()
                 },
-                driver: { isDeleted: false },   
+                driver: { 
+                    isDeleted: false,
+                    admins: { some: { id: id } } 
+                },   
             }
         });
 
         const totalPaid = await prisma.attendance.count({
             where: { 
                 paid: 'Paid',
-                driver_id: { not: null },
+                driver_db_id: { not: null },
                 createdAt: {
                     gte: timeHelper.today(),
                     lt: timeHelper.tomorrow()
                 },
-                driver: { isDeleted: false },   
+                driver: { 
+                    isDeleted: false,
+                    admins: { some: { id: id } } 
+                },   
+                admins: { some: { id: id } }
             }
         });
 
@@ -173,9 +207,14 @@ const manage_users_data = async (req, res) => {
         const safePage = Number.isInteger(rawPage) && rawPage > 0 ? rawPage : 1;
         const take = 10;
 
-        const totalCount = await prisma.driver.count({
-            where: { isDeleted: false }
-        });
+        const condition = role === 'super-admin'
+            ? { isDeleted: false } 
+            : { 
+                isDeleted: false,
+                admins: { some: { id: id } } 
+            }
+
+        const totalCount = await prisma.driver.count({ where: condition });
         const totalPages = Math.max(Math.ceil(totalCount / take), 1);
 
         const validPage = Math.max(1, Math.min(safePage, totalPages));
@@ -184,7 +223,7 @@ const manage_users_data = async (req, res) => {
         const drivers = await prisma.driver.findMany({
             skip,
             take,
-            where: { isDeleted: false },
+            where: condition,
             orderBy: { createdAt: 'desc' },
         });
 
@@ -251,15 +290,28 @@ const addInfo = async (req, res) => {
                 throw new DoesExist();
             }
 
-            const existingDriver = await tx.driver.findFirst({
-                where: {
+            const condition = role === 'super-admin'
+                ? {
                     OR: [
                         { dev_id },
                         { driver_id },
                         { contact }
                     ],
                     isDeleted: false,
-                },
+                }
+                :
+                {
+                    OR: [
+                        { dev_id },
+                        { driver_id },
+                        { contact }
+                    ],
+                    isDeleted: false,
+                    admins: { some: { id: id } }
+                }
+
+            const existingDriver = await tx.driver.findFirst({
+                where: condition
             });
 
             if (existingDriver) {
@@ -277,6 +329,9 @@ const addInfo = async (req, res) => {
                 contact,
                 plate_no,
                 full_name: `${firstName.trim()} ${lastName.trim()}`,
+                admins: {
+                    connect: { id: id }
+                }
             }
 
             if (file) {
@@ -290,12 +345,21 @@ const addInfo = async (req, res) => {
                 data: receiveData
             });
 
+            await tx.deviceQueue.create({
+                data: {
+                    device_id: createDriver.id,
+                    admin_id: id,
+                    processed: false
+                }
+            });
+
             await elasticClient.index({
                 index: 'drivers',
                 id: createDriver.id.toString(),
                 document: {
                     driver_id: createDriver.driver_id,
                     full_name: createDriver.full_name,
+                    admin_id: id
                 }
             })
         });
@@ -315,7 +379,7 @@ const addInfo = async (req, res) => {
         if (err.message === 'DriAlreadyExist') {
             return res.status(409).json({ message: 'Driver already exist! Please try again' });
         }
-        
+        console.error('Manage User Error: ', err);
         res.status(500).json({ message: 'Internal Error' });
     }
 }
@@ -354,12 +418,22 @@ const updateDevice = async (req, res) => {
                 throw new DoesExist();
             }
 
-            const existingDriver = await tx.driver.findFirst({
-                where: {
+            const condition = role === 'super-admin'
+                ? {
+                    id,
+                    dev_id,   
+                    isDeleted: false,
+                }
+                : 
+                {
                     id,
                     dev_id,
                     isDeleted: false,
-                },
+                    admins: { some: { id: userId } }
+                }
+
+            const existingDriver = await tx.driver.findFirst({
+                where: condition,
             });
 
             if (!existingDriver) {
@@ -382,16 +456,23 @@ const updateDevice = async (req, res) => {
                 updateData.card_id = dev_status_mode !== 'Register' ? existingDriver.card_id : null
             }
 
-            await tx.driver.update({
+            updateData.admins = {
+                connect: { id: userId }
+            }
+
+            await tx.deviceQueue.update({
+                where: { id: existingDriver.id },
+                data: { 
+                    processed: dev_status_mode !== 'Register' ? false : true 
+                },
+            });
+
+            const updateDriver = await tx.driver.update({
                 where: {
                     id: id,
                     dev_id: dev_id
                 },
                 data: updateData
-            });
-
-            const updateDriver = await prisma.driver.findUnique({
-                where: { id }
             });
 
             await elasticClient.index({
@@ -400,6 +481,7 @@ const updateDevice = async (req, res) => {
                 document: {
                     driver_id: updateDriver.driver_id,
                     full_name: updateDriver.full_name,
+                    admin_id: userId
                 }
             });
         });
@@ -411,10 +493,10 @@ const updateDevice = async (req, res) => {
         if (err instanceof DoesExist) {
             return res.status(err.status).json({ message: err.message });
         }
-        if (err.message === 'Dev does not exist') {
+        if (err.message === 'DevDoesNotExist') {
             return res.status(400).json({ message: 'Invalid request' });
         }
-
+        console.error('Error', err);
         res.status(500).json({ message: 'Internal Error' });
     }
 }
@@ -453,12 +535,22 @@ const deleteDevice = async (req, res) => {
                 throw new DoesExist();
             }
 
-            const driver = await tx.driver.findFirst({
-                where: {
+            const condition = role === 'super-admin'
+                ? {
                     id: id,
                     dev_id: dev_id,
-                    isDeleted: false
+                    isDeleted: false,
                 }
+                : 
+                {
+                    id: id,
+                    dev_id: dev_id,
+                    isDeleted: false,
+                    admins: { some: { id: userId } }
+                }
+
+            const driver = await tx.driver.findFirst({
+                where: condition
             });
 
             if (!driver) {
@@ -466,7 +558,10 @@ const deleteDevice = async (req, res) => {
             }
 
             await tx.driver.update({
-                where: { id },
+                where: { 
+                    id,
+                    admins: { some: { id: userId } }
+                },
                 data: { isDeleted: true },
             });
 
@@ -541,8 +636,22 @@ const updateDriver = async (req, res) => {
                 throw new DoesExist();
             }
 
+            const condition = role === 'super-admin'
+                ? {
+                    id: parseInt(id), 
+                    dev_id, 
+                    isDeleted: false,
+                }
+                : 
+                {
+                    id: parseInt(id), 
+                    dev_id, 
+                    isDeleted: false,
+                    admins: { some: { id: userId } }
+                }
+
             const existingDriver = await tx.driver.findFirst({
-                where: { id: parseInt(id), dev_id, isDeleted: false },
+                where: condition
             });
 
             if (!existingDriver) throw new Error('DriverNotFound');
@@ -554,7 +663,10 @@ const updateDriver = async (req, res) => {
                 lname: lastName,
                 full_name: `${firstName.trim()} ${lastName.trim()}`,
                 contact,
-                plate_no
+                plate_no,
+                admins: {
+                    connect: { id: userId }
+                }
             };
 
             if (file) {
@@ -565,15 +677,11 @@ const updateDriver = async (req, res) => {
                 updateData.img_type = existingDriver.img_type;
             }
 
-            await tx.driver.update({
+            const updateDriver = await tx.driver.update({
                 where: {
                     id: parseInt(id, 10)
                 },
                 data: updateData
-            });
-
-            const updateDriver = await tx.driver.findUnique({
-                where: { id: parseInt(id, 10) }
             });
 
             await elasticClient.index({
@@ -582,6 +690,7 @@ const updateDriver = async (req, res) => {
                 document: {
                     driver_id: updateDriver.driver_id,
                     full_name: updateDriver.full_name,
+                    admin_id: userId
                 }
             })
         });
@@ -606,6 +715,127 @@ const updateDriver = async (req, res) => {
     }
 }
 
+const dashboardDriverInfo = async (req, res) => {
+    try {
+        const { id, authType, role } = req.user;
+
+        if (!id || !authType || !role) {
+            return res.sendStatus(401);
+        }
+
+        if (role !== 'admin' && role !== 'super-admin' && role !== 'driver') {
+            return res.sendStatus(401);
+        }
+
+        if (!['local', 'google'].includes(authType)) {
+            return res.sendStatus(401);
+        }  
+
+        const latestDriver = await prisma.driver.findFirst({
+            where: {
+                id,
+                isDeleted: false,
+            },
+            select: {
+                driver_img: true,
+                img_type: true,
+                driver_id: true,
+                full_name: true,
+            },
+        });
+
+        if (!latestDriver) {
+            return res.status(200).json(null);
+        }
+
+        let imageUrl = null;
+        if (latestDriver.driver_img && latestDriver.img_type) {
+            const base64Image = Buffer.from(latestDriver.driver_img).toString("base64");
+            imageUrl = `data:${latestDriver.img_type};base64,${base64Image}`;
+        }
+
+        res.status(200).json({ 
+            driver_img: imageUrl,
+            driver_id: latestDriver.driver_id,
+            driver_name: latestDriver.full_name,
+        });
+    } catch (err) {
+        res.status(500).json({ message: 'Internal Error' });       
+    }
+}
+
+const dashboardDriverRequestLeave = async (req, res) => {
+    const io = req.app.get('io');
+
+    try {
+        const { id, authType, role } = req.user;
+
+        if (!id || !authType || !role) {
+            return res.sendStatus(401);
+        }
+
+        if (role !== 'admin' && role !== 'super-admin' && role !== 'driver') {
+            return res.sendStatus(401);
+        }
+
+        if (!['local', 'google'].includes(authType)) {
+            return res.sendStatus(401);
+        }         
+
+        const { leaveType, dateRange, remarks } = req.body;
+
+        if (!leaveType || !dateRange) {
+            return res.status(400).json({ message: 'Missing required fields.' });
+        }
+
+        const driverAccount = await prisma.driverAcc.findUnique({
+            where: { id },
+            include: {
+                driver: true
+            }
+        });
+
+        if (!driverAccount) {
+            return res.status(404).json({ message: 'Driver account not found.' });
+        }
+
+        const leaveRequest = await prisma.requestLeave.create({
+            data: {
+                driver_acc_id: id, 
+                driver_id: driverAccount.driver?.driver_id,
+                leaveType,
+                dateRange,
+                remarks: remarks || null,
+                status: 'Pending',
+            },
+            include: {
+                driverAccount: {
+                    include: {
+                        driver: true
+                    }
+                }, 
+            },
+        });
+
+        io.emit('request-leave', {
+            action: 'request-leave',            
+            message: 'New leave request submitted',
+            data: leaveRequest,
+        });
+
+        io.to(`driver-${id}`).emit('request-leave-status', {
+            action: 'request-leave-status',
+            message: 'Your leave request has been submitted successfully.',
+            data: leaveRequest,
+        });
+
+        res.sendStatus(200);
+    } catch (err) {
+        console.error('Error', err);
+        res.status(500).json({ message: 'Internal Error' });   
+    }
+}
+
 const driverController = {
     dashboard_data,
     manage_users_data,
@@ -613,6 +843,8 @@ const driverController = {
     updateDevice,
     deleteDevice,
     updateDriver,
+    dashboardDriverInfo,
+    dashboardDriverRequestLeave,
 }
 
 export default driverController;

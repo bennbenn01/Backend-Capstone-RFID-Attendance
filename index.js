@@ -12,13 +12,13 @@ import { Server } from 'socket.io'
 import { constants } from 'crypto'
 
 import authRoutes from './routes/authRoutes.js'
-import csrfRoutes from './routes/csrfRoutes.js'
 import userRoutes from './routes/userRoutes.js'
 import driverRoutes from './routes/driverRoutes.js'
 import attendanceRoutes from './routes/attendanceRoutes.js'
 import paymentRoutes from './routes/paymentRoutes.js'
 import dataAnalyticsRoutes from './routes/dataAnalyticsRoutes.js'
 import searchRoutes from './routes/searchRoutes.js'
+import transactionRoutes from './routes/transactionRoutes.js'
 
 dotenv.config({
   path: process.env.NODE_ENV === 'dev' ? '.env.development' : '.env.production'
@@ -78,8 +78,7 @@ app.use(cors({
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-CSRF-Token', 'X-Skip-CSRF-Check'],
-  exposedHeaders: ['X-CSRF-Token']
+  allowedHeaders: ['Content-Type', 'Authorization']
 }));
 
 app.use(express.urlencoded({ extended: true }));
@@ -123,9 +122,6 @@ app.get('/health', (_, res) => {
   res.sendStatus(200)
 });
 
-// CSRF token path
-app.use('/token', csrfRoutes);
-
 // API request path
 app.use('/api/v1/auth', authRoutes);
 app.use('/api/v1/users', userRoutes);
@@ -134,6 +130,7 @@ app.use('/api/v1/attendance', attendanceRoutes);
 app.use('/api/v1/payments', paymentRoutes);
 app.use('/api/v1/analytics', dataAnalyticsRoutes);
 app.use('/api/v1/search', searchRoutes);
+app.use('/api/v1/transaction', transactionRoutes);
 
 app.use((err, req, res, next) => {
   console.error('Global error handler: ', err);

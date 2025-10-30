@@ -1,5 +1,6 @@
 import { PrismaClient } from "@prisma/client"
 import timeHelper from '../utils/timeHelper.js'
+import cron from 'node-cron'
 const prisma = new PrismaClient();
 
 const attendance_data = async (req, res) => {
@@ -10,7 +11,7 @@ const attendance_data = async (req, res) => {
             return res.sendStatus(401);
         }
 
-        if (role !== 'admin' && role !== 'super-admin') {
+        if (role !== 'admin' && role !== 'super-admin' && role !== 'driver') {
             return res.sendStatus(401);
         }
 
@@ -22,26 +23,15 @@ const attendance_data = async (req, res) => {
         const safePage = Number.isInteger(rawPage) && rawPage > 0 ? rawPage : 1;
         const take = 10;
 
-        const totalCount = await prisma.driver.count({
-            where: {
-                isDeleted: false,
-                driver_id: { not: null },
-                createdAt: {
-                    gte: timeHelper.today(),
-                    lt: timeHelper.tomorrow()
-                }
-            }
-        });
-        const totalPages = Math.max(Math.ceil(totalCount / take), 1);
+        let condition = {}
 
-        const validPage = Math.max(1, Math.min(safePage, totalPages));
-        const skip = (validPage - 1) * take;
-
-        const drivers = await prisma.attendance.findMany({
-            skip,
-            take,
-            where: {
-                driver: { isDeleted: false },
+        if (role === 'super-admin' || role === 'admin') {
+            condition = {
+                driver_db_id: { not: null },
+                driver: {
+                    isDeleted: false,
+                    ...(role !== 'super-admin' && { admins: { some: { id: id } }})
+                },
                 OR: [
                     {
                         createdAt: {
@@ -53,9 +43,48 @@ const attendance_data = async (req, res) => {
                         time_in: { not: null },
                         time_out: null
                     }
-                ]
-            },
+                ],
+            }
+        } else if (role === 'driver') {
+            const driver = await prisma.driverAcc.findUnique({
+                where: { id },
+                select: { driverId: true }
+            });
+
+            if (!driver || !driver.driverId) {
+                return res.status(404).json({ message: 'Driver record not found' });
+            }            
+
+            condition = {
+                driver_db_id: driver.driverId,
+                driver: { isDeleted: false }
+            }
+        } else {
+            return res.sendStatus(401);
+        }
+ 
+        const totalCount = await prisma.attendance.count({
+            where: condition
+        });
+        const totalPages = Math.max(Math.ceil(totalCount / take), 1);
+
+        const validPage = Math.max(1, Math.min(safePage, totalPages));
+        const skip = (validPage - 1) * take;
+
+        const drivers = await prisma.attendance.findMany({
+            skip,
+            take,
+            where: condition,
             orderBy: { createdAt: 'desc' },
+            include: { 
+                driver: {
+                    select: {
+                        driver_id: true,
+                        full_name: true,
+                        createdAt: true,
+                    }
+                } 
+            }
         });
 
         res.status(200).json({
@@ -64,22 +93,38 @@ const attendance_data = async (req, res) => {
             currentPage: validPage
         });
     } catch (err) {
+        console.error('Error', err);
         res.status(500).json({ message: 'Internal Error' });
     }
 }
 
 const getDevice = async (req, res) => {
   try {
+    const queued = await prisma.deviceQueue.findFirst({
+        where: { processed: false },
+        orderBy: { createdAt: 'asc' }
+    });
+
+    if (!queued) {
+        return res.status(200).send("NoDevice");
+    }
+
     const device = await prisma.driver.findFirst({
-        where: { 
+        where: {
+            id: queued.device_id, 
             card_id: null,
-            dev_status_mode: 'Register' 
+            dev_status_mode: 'Register',
+            isDeleted: false
         }, 
         orderBy: { createdAt: 'asc' },
         select: { dev_id: true },
     });
-    console.log('Get Device: ', device);
+    
     if (!device) {
+        await prisma.deviceQueue.update({
+            where: { id: queued.id },
+            data: { processed: true }
+        });
         return res.status(200).send("NoDevice");
     }
 
@@ -99,21 +144,57 @@ const driCardRegister = async (req, res) => {
         return res.status(400).send("NotFound");
         }
 
-        const dri = await prisma.driver.findUnique({ where: { dev_id: device_id } });
+        const dri = await prisma.driver.findFirst({ 
+            where: { 
+                dev_id: device_id,
+                isDeleted: false 
+            },
+            include: {
+                admins: true,
+                driverAcc: true
+            }
+        });
         if (!dri) return res.status(404).send("NoCardFound");
 
-        const cardExists = await prisma.driver.findUnique({ where: { card_id } });
+        const cardExists = await prisma.driver.findFirst({ 
+            where: { 
+                card_id,
+                isDeleted: false 
+            } 
+        });
         if (cardExists && cardExists.dev_id !== device_id) {
             return res.status(400).send("CardAlreadyExist");
         }
 
         await prisma.driver.update({
-            where: { dev_id: device_id },
+            where: { id: dri.id },
             data: { 
                 card_id, 
                 dev_status_mode: 'Attendance',
                 dev_mode: true
             },
+        });
+
+        if (!dri.driverAcc) {
+            await prisma.driverAcc.create({
+                data: {
+                    fname: dri.fname,
+                    lname: dri.lname,
+                    driver_name: dri.full_name,
+                    authType: 'local',
+                    role: 'driver',
+                    verified: true,
+                    isActive: false,
+                    driver: {
+                        connect: { id: dri.id }
+                    }
+                }
+            });
+        }
+
+        await prisma.deviceQueue.updateMany({
+            where: { device_id: dri.id },
+            data: { processed: true }
         });
 
         io.emit('card_updated', {
@@ -122,7 +203,6 @@ const driCardRegister = async (req, res) => {
 
         res.status(200).send("Registered");
     } catch (err) {
-        console.error(err);
         res.status(500).send("Internal Error");
     }
 };
@@ -135,7 +215,7 @@ const checkAttendanceStatus = async (req, res) => {
             return res.send('NoCardID');
         }
 
-        const driver = await prisma.driver.findUnique({ where: { card_id: card_id } });
+        const driver = await prisma.driver.findFirst({ where: { card_id: card_id } });
 
         if (!driver) {
             console.log('Device mode is not found',  driver);
@@ -149,7 +229,7 @@ const checkAttendanceStatus = async (req, res) => {
 
         const unfinished = await prisma.attendance.findFirst({
             where: {
-                driver_id: driver.driver_id,
+                driver_db_id: driver.id,
                 time_in: { not: null },
                 time_out: null
             }, 
@@ -160,7 +240,7 @@ const checkAttendanceStatus = async (req, res) => {
 
         const todayAttendance = await prisma.attendance.findFirst({
             where: {
-                driver_id: driver.driver_id,
+                driver_db_id: driver.id,
                 createdAt: {
                     gte: timeHelper.today(),
                     lt: timeHelper.tomorrow()
@@ -186,8 +266,18 @@ const checkAttendanceStatus = async (req, res) => {
 
         return res.send(`${status}|id:${driver.dev_id}`);
     } catch (err) {
+        console.error('Check Attendance: ', err);
         res.status(500).send('Internal Error');
     }
+}
+
+const googleFormSubmit = async (req, res) => {
+    try {
+        const { full_name, driver_status, paymentOption } = req.body;
+        
+    } catch (error) {
+        res.status(500).send('Internal Error');
+    }   
 }
 
 const timeInAttendance = async (req, res) => {
@@ -207,8 +297,9 @@ const timeInAttendance = async (req, res) => {
             return res.status(400).send('NoIDs');
         }
 
-        const dri = await prisma.driver.findUnique({
-            where: { card_id }
+        const dri = await prisma.driver.findFirst({
+            where: { card_id },
+            include: { admins: true }
         });
 
         if (!dri) {
@@ -225,7 +316,7 @@ const timeInAttendance = async (req, res) => {
 
         const latest = await prisma.attendance.findFirst({
             where: {
-                driver_id: dri.driver_id,
+                driver_db_id: dri.id,
                 time_in: { not: null },
                 time_out: null,
                 createdAt: {
@@ -244,9 +335,10 @@ const timeInAttendance = async (req, res) => {
                 data: {
                     driver: {
                         connect: {
-                            driver_id: dri.driver_id
+                            id: dri.id
                         }
                     },
+                    driver_id: dri.driver_id,
                     full_name: dri.full_name,
                     driver_status: 'IN',
                     butaw: 0,
@@ -255,7 +347,10 @@ const timeInAttendance = async (req, res) => {
                     paid: 'Not Paid',
                     time_in: timeHelper.now(),
                     time_out: null,
-                    createdAt: timeHelper.now()
+                    createdAt: timeHelper.now(),
+                    admins: {
+                        connect: (dri.admins || []).map((admin) => ({ id: admin.id }))
+                    }
                 }
             });
 
@@ -268,49 +363,45 @@ const timeInAttendance = async (req, res) => {
             return res.send(`In|${dri.full_name}`);
         }
     } catch (err) {
+        console.error('Time In: ', err);
         res.status(500).send('Error');
     }
 }
 
 const getPendingLogoutConfirmation = async (req, res, latest = null) => {
     try {
-        let attendanceRecords;
+        const adminId = req.user?.id || null;
+
+        let driverId;
 
         if (!latest) {
-            const { driver_id } = req.body;
-
-            if (!driver_id) {
+            ({ driver_id: driverId } = req.body || {});
+            if (!driverId) {
                 return res.status(400).json({ message: 'Driver ID is required' });
             }
-
-            attendanceRecords = await prisma.attendance.findFirst({
-                where: {
-                    driver_id: latest.driver_id,
-                    time_out: null,
-                    paid: 'Paid'
-                },
-                orderBy: {
-                    createdAt: 'desc'
-                },
-                include: {
-                    driver: true
-                }
-            });
         } else {
-            attendanceRecords = await prisma.attendance.findFirst({
-                where: {
-                    driver_id: latest.driver_id,
-                    time_out: null,
-                    paid: 'Paid'
-                },
-                orderBy: {
-                    createdAt: 'desc'
-                },
-                include: {
-                    driver: true
-                }
-            });
+            driverId = latest.driver_id;
         }
+
+        const whereClause = {
+            driver_id: driverId,
+            time_out: null,
+            paid: 'Paid',
+            driver: {
+                isDeleted: false
+            }
+        };
+
+        if (adminId) {
+            whereClause.driver.admins = { some: { id: adminId } };
+            whereClause.admins = { some: { id: adminId } };
+        }
+
+        const attendanceRecords = await prisma.attendance.findFirst({
+            where: whereClause,
+            orderBy: { createdAt: 'desc' },
+            include: { driver: true }
+        });
 
         if (!attendanceRecords) {
             return res.status(404).json({ message: 'Attendance record not found' });
@@ -356,7 +447,15 @@ const reqLogoutConfirmation = async (req, res) => {
             return res.status(400).send('NoIDs');
         }
 
-        const driver = await prisma.driver.findUnique({ where: { card_id } });
+        const driver = await prisma.driver.findFirst({ 
+            where: { 
+                card_id,
+                isDeleted: false 
+            },
+            include: {
+                admins: true
+            } 
+        });
 
         if (!driver) {
             return res.send('NotFound');
@@ -374,7 +473,12 @@ const reqLogoutConfirmation = async (req, res) => {
             where: {
                 driver_id: driver.driver_id,
                 time_in: { not: null },
-                time_out: null
+                time_out: null,
+                driver: {
+                    isDeleted: false,
+                    admins: { some: { id: { in: driver.admins.map(admin => admin.id) } } }
+                },
+                admins: { some: { id: { in: driver.admins.map(admin => admin.id) } } }
             }
         });
 
@@ -384,7 +488,12 @@ const reqLogoutConfirmation = async (req, res) => {
                 createdAt: {
                     gte: timeHelper.today(),
                     lt: timeHelper.tomorrow()
-                }
+                },
+                driver: {
+                    isDeleted: false,
+                    admins: { some: { id: { in: driver.admins.map(admin => admin.id) } } }
+                },
+                admins: { some: { id: { in: driver.admins.map(admin => admin.id) } } }
             },
         });
 
@@ -452,7 +561,14 @@ const checkPaidLogout = async (req, res) => {
         const result = await prisma.$transaction(async (tx) => {
             const latest = await tx.attendance.findFirst({
                 where: {
-                    driver_id,
+                    id: id,
+                    driver_id: driver_id,
+                    time_out: null,
+                    paid: 'Paid',
+                    driver: {
+                        isDeleted: false
+                    },
+                    admins: { some: { id: req.user?.id || null } }
                 },
                 orderBy: {
                     createdAt: 'desc'
@@ -496,15 +612,267 @@ const checkPaidLogout = async (req, res) => {
     }
 }
 
+const checkDriverName = async (req, res) => {
+    try {
+        const { id, authType, role } = req.user;
+
+        if (!id || !authType || !role) {
+            return res.sendStatus(401);
+        }
+
+        if (role !== 'admin' && role !== 'super-admin' && role !== 'driver') {
+            return res.sendStatus(401);
+        }
+
+        if (!['local', 'google'].includes(authType)) {
+            return res.sendStatus(401);
+        }        
+
+        const driver = await prisma.driver.findFirst({
+            where: { 
+                id,
+                isDeleted: false
+            },
+            select: { id: true, full_name: true }
+        });
+
+        if (!driver) {
+            return res.status(404).json({ message: 'Driver not found' });
+        }
+
+        res.status(200).json(driver);        
+    } catch (err) {
+        console.error('Error', err);
+        res.status(500).json({ mnessage: 'Internal Error' });
+    }
+}
+
+const manualTimeIn = async (req, res) => {
+    try {
+        const { id, authType, role } = req.user;
+
+        if (!id || !authType || !role) {
+            return res.sendStatus(401);
+        }
+
+        if (role !== 'admin' && role !== 'super-admin' && role !== 'driver') {
+            return res.sendStatus(401);
+        }
+
+        if (!['local', 'google'].includes(authType)) {
+            return res.sendStatus(401);
+        }  
+
+        const { driver_db_id, time_in, reason } = req.body;
+
+        if (!driver_db_id || !time_in) {
+            return res.status(400).json({ message: 'Driver ID and Time In are required.' });
+        }
+
+        const existing = await prisma.attendance.findFirst({
+            where: {
+                driver_db_id: Number(driver_db_id),
+                time_out: null,
+            }
+        });
+
+        if (existing) {
+            return res.status(400).json({ message: 'You already have an active attendance record without time out.' });
+        }
+
+        const driver = await prisma.driver.findUnique({
+            where: { id: driver_db_id }
+        });
+
+        if (!driver) {
+            return res.status(404).json({ message: 'Driver not found.' });
+        }
+
+        const unfinished = await prisma.attendance.findFirst({
+            where: {
+                driver_db_id: Number(driver_db_id),
+                time_in: { not: null },
+                time_out: null,
+                createdAt: {
+                    gte: timeHelper.today(),
+                    lt: timeHelper.tomorrow()
+                }
+            }
+        });
+
+        if (unfinished) {
+            return res.status(400).json({ message: 'Driver already time-in and has no time-out today.' });
+        }
+
+        const completed = await prisma.attendance.findFirst({
+            where: {
+                driver_db_id: driver_db_id,
+                time_in: { not: null },
+                time_out: { not: null },
+                createdAt: {
+                    gte: timeHelper.today(),
+                    lt: timeHelper.tomorrow()
+                }
+            }
+        });
+
+        if (completed) {
+            return res.status(400).json({ message: 'Driver has already completed attendance today.' });
+        }
+
+        await prisma.attendance.create({
+            data: {
+                driver_db_id: driver_db_id,
+                driver_id: driver.driver_id,
+                full_name: driver.full_name,
+                driver_status: 'IN',
+                time_in: new Date(time_in),
+                time_out: null,
+                createdAt: new Date(),
+                balance: 320,
+                paid: 'Not Paid',
+                reason
+            }
+        });
+
+        res.sendStatus(201);
+    } catch (err) {
+        res.status(500).json({ mnessage: 'Internal Error' });
+    }
+}
+
+const manualTimeOut = async (req, res) => {
+    try {
+        const { id, authType, role } = req.user;
+
+        if (!id || !authType || !role) {
+            return res.sendStatus(401);
+        }
+
+        if (role !== 'admin' && role !== 'super-admin' && role !== 'driver') {
+            return res.sendStatus(401);
+        }
+
+        if (!['local', 'google'].includes(authType)) {
+            return res.sendStatus(401);
+        }  
+
+        const { driver_db_id, time_out, reason } = req.body;
+
+        if (!driver_db_id || !time_out) {
+            return res.status(400).json({ message: 'Driver ID and Time Out are required.' });
+        }
+
+        const driver = await prisma.driver.findUnique({
+            where: { id: driver_db_id }
+        });
+
+        if (!driver) {
+            return res.status(404).json({ message: 'Driver not found.' });
+        }
+
+        const existing = await prisma.attendance.findFirst({
+            where: {
+                driver_db_id: driver_db_id,
+                time_out: null,
+            },
+            orderBy: { time_in: 'desc' }
+        });
+
+        if (!existing) {
+            return res.status(400).json({ message: 'No active attendance found to time out.' });
+        }
+
+        await prisma.attendance.update({
+            where: { id: existing.id },
+            data: {
+                time_out: new Date(time_out),
+                driver_status: 'OUT',
+                reason
+            }
+        });
+
+        res.sendStatus(201);
+    } catch (err) {
+        res.status(500).json({ mnessage: 'Internal Error' });
+    }
+}
+
+const paymentReminder = async () => {
+    console.log('Node-Cron Started');
+
+    try {
+        const io = global.io;
+        const threeDaysAgo = new Date();
+        threeDaysAgo.setDate(threeDaysAgo.getDate() - 3);
+
+        const unpaidAttendances = await prisma.attendance.findMany({
+            where: {
+                paid: 'Not Paid',
+                createdAt: { lte: threeDaysAgo }
+            },
+            include: { driver: true }
+        });
+
+        unpaidAttendances.forEach(att => {
+            io.emit('payment-reminder', {
+                driver_id: att.driver_id,
+                full_name: att.driver.full_name,
+                message: 'Reminder: Payment for butaw and boundary for 3 days is still missing.'
+            });
+        });
+    } catch (err) {
+        console.log('Node-Cron Error');
+    }
+}
+
+const inActiveDriverReminder = async () => {
+    console.log('Node-Cron Started');
+
+    try {
+        const io = global.io;
+        const sixMonthsAgo = new Date();
+        sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
+
+        const inactiveDrivers = await prisma.driver.findMany({
+            where: {
+                updatedAt: { lte: sixMonthsAgo },
+                isDeleted: false
+            }
+        });
+
+        inactiveDrivers.forEach(driver => {
+            io.emit('inactive-driver', {
+                driver_id: driver.id,
+                full_name: driver.full_name,
+                message: 'Driver inactive for 6 months. Renewal fee required to continue membership.'
+            });
+        });
+    } catch (err) {
+        console.log('Node-Cron Error');
+    }
+}
+
+cron.schedule('0 12 * * *', paymentReminder);
+cron.schedule('0 12 * * *', inActiveDriverReminder);
+
+await paymentReminder();
+await inActiveDriverReminder();
+
 const attendanceController = {
     attendance_data,
     getDevice,
     driCardRegister,
     checkAttendanceStatus,
+    googleFormSubmit,
     timeInAttendance,
     reqLogoutConfirmation,
     checkPaidLogout,
-    getPendingLogoutConfirmation
+    getPendingLogoutConfirmation,
+
+    checkDriverName,
+    manualTimeIn,
+    manualTimeOut,
 }
 
 export default attendanceController;
